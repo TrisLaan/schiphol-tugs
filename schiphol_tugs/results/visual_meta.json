@@ -1,0 +1,7 @@
+{
+  "duration_s": 86400,
+  "fleet_size": 30,
+  "interval_s": 1,
+  "window_end_s": 86400,
+  "window_start_s": 0
+}

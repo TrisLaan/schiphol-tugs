@@ -1,0 +1,170 @@
+{
+  "calibration": {
+    "alpha": 1.0,
+    "fleet_size": 30,
+    "xi": 2.0
+  },
+  "dominance_hierarchy_and_division_of_labor": {
+    "division_of_labor_gini_end": 0.325,
+    "empty_piers_end": 0,
+    "empty_piers_start": 7,
+    "n_contested_tugs": 30,
+    "top_tug_id": 6,
+    "top_tug_win_rate": 0.2987,
+    "win_rate_gini": 0.1752
+  },
+  "experiment_1_dispatch_policy_comparison": {
+    "Centralized baseline": {
+      "mean_wait_s": {
+        "ci95_halfwidth": 13.24,
+        "mean": 174.13
+      },
+      "p95_wait_s": {
+        "ci95_halfwidth": 52.02,
+        "mean": 535.0
+      },
+      "total_distance_km": {
+        "ci95_halfwidth": 226.5,
+        "mean": 5113.0
+      },
+      "total_energy_pct": {
+        "ci95_halfwidth": 249.03,
+        "mean": 5234.6
+      }
+    },
+    "Centralized optimal": {
+      "mean_wait_s": {
+        "ci95_halfwidth": 13.24,
+        "mean": 174.13
+      },
+      "p95_wait_s": {
+        "ci95_halfwidth": 52.02,
+        "mean": 535.0
+      },
+      "total_distance_km": {
+        "ci95_halfwidth": 226.5,
+        "mean": 5113.0
+      },
+      "total_energy_pct": {
+        "ci95_halfwidth": 249.03,
+        "mean": 5234.6
+      }
+    },
+    "Random assignment": {
+      "mean_wait_s": {
+        "ci95_halfwidth": 14.34,
+        "mean": 295.43
+      },
+      "p95_wait_s": {
+        "ci95_halfwidth": 120.12,
+        "mean": 802.02
+      },
+      "total_distance_km": {
+        "ci95_halfwidth": 276.27,
+        "mean": 5826.1
+      },
+      "total_energy_pct": {
+        "ci95_halfwidth": 274.48,
+        "mean": 5590.77
+      }
+    },
+    "Swarm (VRTM + wasp)": {
+      "mean_wait_s": {
+        "ci95_halfwidth": 14.86,
+        "mean": 228.19
+      },
+      "p95_wait_s": {
+        "ci95_halfwidth": 72.49,
+        "mean": 658.89
+      },
+      "total_distance_km": {
+        "ci95_halfwidth": 255.97,
+        "mean": 5516.62
+      },
+      "total_energy_pct": {
+        "ci95_halfwidth": 264.23,
+        "mean": 5436.42
+      }
+    }
+  },
+  "experiment_2_zone_formation": {
+    "specialization_end": {
+      "ci95_halfwidth": 0.009,
+      "mean": 0.1027
+    },
+    "specialization_start": {
+      "mean": 0.0
+    }
+  },
+  "experiment_3_tug_failures": {
+    "baseline_mean_wait_s": {
+      "ci95_halfwidth": 15.83,
+      "mean": 179.5
+    },
+    "swarm_mean_wait_s": {
+      "ci95_halfwidth": 15.7,
+      "mean": 241.03
+    }
+  },
+  "experiment_4_demand_spike": {
+    "baseline_mean_wait_s": {
+      "ci95_halfwidth": 11.33,
+      "mean": 181.4
+    },
+    "swarm_mean_wait_s": {
+      "ci95_halfwidth": 23.53,
+      "mean": 237.85
+    }
+  },
+  "experiment_5_ablation": {
+    "adaptive_mean_wait_s": {
+      "ci95_halfwidth": 14.86,
+      "mean": 228.19
+    },
+    "fixed_mean_wait_s": {
+      "ci95_halfwidth": 16.43,
+      "mean": 234.28
+    },
+    "significance": {
+      "effect_size_rank_biserial": -1.0,
+      "n": 6,
+      "p_value": 0.03125,
+      "test": "wilcoxon"
+    }
+  },
+  "experiment_6_charging_station_outage": {
+    "normal_mean_wait_s": {
+      "ci95_halfwidth": 14.86,
+      "mean": 228.19
+    },
+    "outage_mean_wait_s": {
+      "ci95_halfwidth": 11.9,
+      "mean": 226.38
+    }
+  },
+  "interpretation": "Dominance hierarchy: of 30 tugs, 30 entered at least one multi-responder wasp contest over the day. Win rate is unevenly distributed (Gini = 0.175; 0 = every tug wins its contests equally often, 1 = one tug wins them all) -- tug 6 tops the hierarchy at a 30% win rate over 77 contests. This is not arbitrary: the wasp force F = 0.6/(1+d_norm) + 0.3*battery + 0.1*(1-busy) weights proximity 2.0x more heavily than battery and 6.0x more than idle status, so a tug that has already specialised on a pier (low theta there -> it volunteers more often -> it is more often physically close when it volunteers, because VRTM drift sends idle tugs back to their most-specialised pier hub, see Simulation._reposition_target) systematically wins more of the contests it enters. Win-rate inequality and threshold specialisation are therefore two views of the same underlying feedback loop, not two independent phenomena.\n\nDivision of labour: the number of piers with zero primary specialists fell from 7 at t=0h to 0 at t=24h (tug-to-pier assignment Gini at t=24h = 0.325). The mechanism is the asymmetric VRTM update: a performer's threshold drops by xi=2 while every other eligible tug's threshold in that region only rises by phi=0.1. Because xi > phi, a single win pulls a tug's threshold down faster than repeated near-misses push it back up, so the first tug to win in a region gets an increasing edge there on every subsequent request -- a positive-feedback (rich-get-richer) mechanism, not something imposed by the environment.",
+  "n_seeds": 6,
+  "narrative": "Over a simulated 24-hour day with ~538 tow requests, replicated across N=6 independent seeds, the decentralized swarm achieved a mean aircraft wait of 228.2 s (95% CI +/-14.9 s) versus 174.1 s for the centralized greedy baseline (+31.0 %), outside the 20 % competitiveness target (Wilcoxon signed-rank p=0.0312, matched-pairs rank-biserial effect size=1.00). The random-assignment floor and centralized-optimal ceiling give this comparison context (see wait_time_comparison.png). Emergent service zones formed: the fleet-wide specialization index rose from 0.000 to 0.103 averaged over seeds. With fixed (non-adaptive) thresholds the mean wait was 234.3 s and final specialization was 0.000 (p=0.0312 vs adaptive), confirming threshold adaptation drives both the zone formation and the performance. Sensitivity analysis identifies 'fleet_size' as the parameter with the largest impact on mean wait (see sensitivity_tornado.png).",
+  "sensitivity": {
+    "baseline_mean_wait_s": 198.68,
+    "most_impactful_parameter": "fleet_size",
+    "n_seeds_per_cell": 3,
+    "parameter_impact_ranges_s": {
+      "demand rate (\u00d7)": 513.69,
+      "fleet_size": 1324.7,
+      "n (Hill exponent)": 78.62,
+      "n_charging_stations": 7.57,
+      "phi (forgetting rate)": 55.62,
+      "theta bounds (spread \u00d7)": 30.95,
+      "w_d (distance weight)": 26.42,
+      "xi (specialization gain)": 21.56
+    },
+    "sweep_window_hours": 2.0
+  },
+  "swarm_vs_baseline_significance": {
+    "effect_size_rank_biserial": 1.0,
+    "n": 6,
+    "p_value": 0.03125,
+    "test": "wilcoxon"
+  }
+}
