@@ -28,7 +28,7 @@ def test_stimulus_grows_and_saturates():
 
 def test_stimulus_priority_scales_growth_not_floor():
     # priority leaves s0 (wait=0) untouched but scales the growth rate, so a
-    # higher-priority (e.g. wide-body, AUDIT.md 2.2) job's stimulus rises
+    # higher-priority (e.g. wide-body) job's stimulus rises
     # faster per second of waiting than a default-priority job's.
     assert vrtm.stimulus(0.0, CFG, priority=1.8) == CFG.s0
     assert vrtm.stimulus(10.0, CFG, priority=1.8) == pytest.approx(

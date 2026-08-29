@@ -22,10 +22,7 @@ assign themselves to aircraft tow requests with two bio-inspired mechanisms:
 The decentralized swarm is validated against **three** controls on identical
 request streams — a uniformly random assignment (naive floor), a centralized
 greedy nearest-available dispatcher, and a centralized optimal (Hungarian)
-per-step matching (ceiling) — and the fleet is shown to emergently partition
-the airport into service zones, with the mechanism behind that
-specialisation and the resulting wasp-contest dominance hierarchy analysed
-in `src/analysis.py`. Every headline result is replicated over
+per-step matching (ceiling). Every headline result is replicated over
 `ExperimentConfig.n_seeds` (default 6) independent seeds and reported as
 mean ± 95% CI; see `docs/notation.md` for the full symbol table, glossary,
 units, and the project's uncertainty-reporting policy, and `references.bib`
@@ -40,8 +37,8 @@ placeholder name there before submission.
 
 ```bash
 pip install -r requirements.txt   # versions pinned; verified clean install
-pytest -q --cov=src               # 77 tests (76 pass, 1 skipped), ~96% coverage
-python run_all.py                 # calibration + all experiments + all figures (~a few minutes)
+pytest -q                         # 57 tests (56 pass, 1 skipped)
+python run_all.py                 # calibration, baseline comparison, sensitivity, figures (~a few minutes)
 ```
 
 `run_all.py` is fully deterministic (single project seed 42 in
@@ -53,14 +50,11 @@ lands in `results/`:
 
 - `results/calibration.csv`, `results/sensitivity.csv` — the parameter
   sweeps and their metrics (multi-seed, with uncertainty)
-- `results/seed_results.csv` — every per-seed, per-experiment raw metric row
-- `results/events.csv`, `results/contests.csv`, `results/theta_snapshots.csv`
-  — full event / wasp-contest / threshold-trajectory logs for one
-  representative seed (seed 0), consumed by `src/analysis.py`
+- `results/seed_results.csv` — every per-seed, per-mode raw metric row
 - `results/summary.json` — calibrated values, headline metrics (mean ± CI)
-  per experiment, significance tests, sensitivity ranking, and a
+  per policy, significance tests, sensitivity ranking, and a
   natural-language narrative (also printed to stdout)
-- `results/figures/*.png` — the sixteen figures below (300 DPI)
+- `results/figures/*.png` — the six figures below (300 DPI)
 
 `results/animation*.mp4` and `results/snapshots.csv` (the visual-replay log)
 are large, fully regeneratable (`python visualize.py`) artefacts and are
@@ -69,7 +63,7 @@ excluded from version control by `.gitignore` — see "Visualizing a run".
 ## Project structure
 
 ```
-run_all.py          entry point: calibration, experiments, figures, summary
+run_all.py          entry point: calibration, baseline comparison, sensitivity, figures, summary
 src/config.py       every parameter (Config + ExperimentConfig) + seeded rng factory (seed = 42)
 src/airport.py      Schiphol-shaped NetworkX graph, chargers, heterogeneous request stream
 src/vrtm.py         threshold response maths (stimulus, P, adaptation)
@@ -77,14 +71,14 @@ src/wasp.py         dominance force + deterministic/stochastic contest
 src/tug.py          tug agent: state machine, path following, battery
 src/simulator.py    1 s discrete-event loop (swarm, baseline, random, optimal modes)
 src/baseline.py     random / greedy-nearest / centralized-optimal (Hungarian) dispatch controls
-src/metrics.py      wait/energy/zone-formation/dominance-hierarchy metrics
+src/metrics.py      waiting-time and energy/distance metrics
 src/stats.py        multi-seed mean+CI and paired Wilcoxon significance testing
 src/sensitivity.py  one-at-a-time + 2D-interaction parameter sweeps, tornado ranking
-src/analysis.py     interpretive analysis: dominance hierarchy, division of labour, why
 src/plotting.py     all figures (300 DPI PNG, labelled axes + units + legends)
+src/visualizer.py   animated replay of a recorded run on the airport map
 docs/notation.md    symbol table, glossary, units, locality statement, uncertainty policy
 references.bib      VRTM / wasp / airport-operations / electric-taxiing citations
-tests/               pytest suite: vrtm, wasp, airport, simulator, baseline, stats, sensitivity, analysis, metrics, plotting, visualizer
+tests/               pytest suite: vrtm, wasp, airport, simulator, baseline, stats, sensitivity, metrics, plotting, visualizer
 ```
 
 ## Model summary
@@ -100,17 +94,25 @@ tests/               pytest suite: vrtm, wasp, airport, simulator, baseline, sta
   pier zone its pickup location lies in (each runway threshold belongs to the
   zone of its nearest pier), so an emergent service zone is a pier plus the
   runways it naturally serves.
-- **Tugs**: 10 m/s empty / 5 m/s towing, drain 0.5 %/km empty / 1.5 %/km
-  towing, recharge 10 %/min at their round-robin home station, withdraw below
-  25 % battery. After finishing a job an idle tug drifts back to the hub of
-  its most-specialised (lowest-θ) pier — this converts threshold
-  specialisation into physical zone coverage; baseline tugs drift to the hub
-  nearest their home station. Drifting tugs stay eligible and abort the drift
-  when they win a job. Waiting time is measured from request creation until
-  the tow physically starts.
+- **Tugs**: 29 tugs (literature-sourced fleet size, fixed — not calibrated),
+  10 m/s empty / 5 m/s towing, 300 kWh battery pack, drain 1.5 kWh/km empty /
+  4.5 kWh/km towing, recharge at a 150 kW charger per station (~2 h 0→100 %)
+  at their round-robin home station, withdraw immediately below 25 % state of
+  charge (hard safety floor). Below 50 % but above the hard floor, an idle
+  swarm tug becomes a soft charging candidate: stations broadcast a "low
+  battery" signal and a reversed wasp contest (`wasp.charge_force`, favouring
+  low battery and proximity, mirroring the job contest) decides who takes a
+  free bay (3 per station), staggering charging departures instead of the
+  whole fleet crossing one hard threshold in the same window — see
+  `Simulation._run_charging_dispatch`, swarm mode only. After finishing a job
+  an idle tug drifts back to the hub of its most-specialised (lowest-θ) pier
+  — this converts threshold specialisation into physical zone coverage;
+  baseline tugs drift to the hub nearest their home station. Drifting tugs
+  stay eligible and abort the drift when they win a job. Waiting time is
+  measured from request creation until the tow physically starts.
 - **Calibration** (in `run_all.py`): ξ and α are swept jointly on a 4 h
-  morning-peak window at fleet size 20, then fleet size is swept at the best
-  (ξ, α); minimal mean wait wins, total distance breaks ties.
+  morning-peak window at the fixed fleet size (29); minimal mean wait wins,
+  total distance breaks ties.
 
 ## Visualizing a run
 
@@ -160,21 +162,11 @@ rng streams as `run_all.py`, so it is the same day the report describes.
 | Figure | What it shows / how to interpret it |
 |---|---|
 | `airport_layout.png` | The graph: gates (blue dots) clustered per labeled pier, runways as heavy lines, thresholds as yellow squares, chargers as violet triangles. Should be recognisably Schiphol-shaped. |
-| `demand_profile.png` | Realized hourly request counts (bars) against the expected diurnal rate λ(t) (line): two peaks, quiet night. |
 | `wait_time_comparison.png` | Mean and 95th-percentile aircraft wait (mean ± 95% CI across seeds) for all four dispatch policies: random (floor), swarm, centralized greedy (baseline), centralized optimal (ceiling). The swarm is competitive if it sits close to the greedy baseline and well below random. |
-| `wait_time_cdf.png` | Full wait distribution for all four policies; a curve further left/up serves more aircraft faster. The swarm's small horizontal offset vs. the greedy baseline is the seconds of volunteering latency inherent to threshold-based response. |
-| `energy_comparison.png` | Fleet battery consumption (energy proxy) and kilometres driven. Shows the price (or saving) of decentralization in movement. |
-| `threshold_evolution.png` | Tug × pier threshold heatmaps at 0 h / 6 h / 24 h. Uniform at t = 0; dark cells (low θ) appearing over time are tugs that specialised on a pier — emergent service zones. |
-| `specialization_index.png` | Mean coefficient of variation of thresholds across tugs, per pier, averaged, over time. Rising ⇒ zones forming; the flat ablation curve is the fixed-threshold control. |
-| `robustness_failure.png` | Rolling (1 h) mean wait with 5 tugs permanently failing at 12:00 (dashed red line), mean ± s.d. across seeds. Both systems degrade; the swarm re-absorbs the load without any central re-planning. |
-| `robustness_spike.png` | Same view with demand tripled 10:00–10:30 (shaded), mean ± s.d. across seeds. Shows the backlog surge and recovery time. |
-| `robustness_charger_outage.png` | Rolling mean wait with charging station CS1 disabled 09:00–13:00, vs. the same swarm under normal operation. Shows how the fleet re-routes to the remaining 3 stations. |
-| `ablation.png` | Adaptive vs frozen thresholds, mean ± 95% CI across seeds: mean wait and final specialization index. Adaptation should win on both (paired Wilcoxon test in `results/summary.json`). |
+| `energy_comparison.png` | Fleet energy consumption (kWh) and kilometres driven. Shows the price (or saving) of decentralization in movement. |
 | `calibration_heatmap.png` | 2D interaction sweep: mean wait as a function of ξ and α (stimulus growth rate) on the calibration window — the sensitivity rubric's required 2D heatmap, used here to pick the operating point. |
 | `sensitivity_heatmap_xi_demand.png` | A second, independent 2D interaction sweep: mean wait as a function of ξ and demand multiplier, multi-seed per cell. |
-| `sensitivity_tornado.png` | One-at-a-time sweep ranges (ξ, φ, n, θ-bound spread, w_d, fleet size, demand rate, number of charging stations) against the baseline mean wait — a tornado plot ranking which parameters matter most. |
-| `dominance_hierarchy.png` | Per-tug wasp-contest win rate, sorted descending. A flat bar chart would mean no hierarchy emerged; a skewed one (reported as a Gini coefficient in `results/summary.json`) means a subset of tugs consistently wins contests. |
-| `division_of_labor.png` | Number of tugs primarily specialised (lowest θ) per pier, at t=0h vs t=24h. Shows piers gaining dedicated tugs over the day. |
+| `sensitivity_tornado.png` | One-at-a-time sweep ranges (ξ, φ, n, θ-bound spread, w_d, demand rate, number of charging stations) against the baseline mean wait — a tornado plot ranking which parameters matter most. Fleet size is excluded: it's a fixed literature constant (29), not a decision or algorithm parameter. |
 
 ## Known limitations
 
@@ -182,10 +174,8 @@ rng streams as `run_all.py`, so it is the same day the report describes.
   routes ignore runway crossings, one-way rules and other traffic.
 - Tow requests are independent Poisson draws; real schedules bank by airline
   and runway configuration changes with wind.
-- A failed tug's aircraft is re-opened from its original stand (no mid-taxiway
-  recovery is modelled), and hook-up/release times are folded into travel.
-- The energy proxy is battery percentage-points consumed (proportional to kWh
-  for a fixed pack), not a physical energy model.
+- Hook-up and release times are folded into travel time rather than modelled
+  as separate service durations.
 - Job heterogeneity is currently one axis (wide-body vs. narrow-body urgency,
   `Config.p_widebody`/`widebody_priority`, see `docs/notation.md` §2.4);
   there is no separate deadline/missed-deadline concept, since real tow

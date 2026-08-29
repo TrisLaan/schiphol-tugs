@@ -4,8 +4,9 @@ A tug is a small state machine (idle / moving_to_aircraft / towing /
 moving_to_charger / charging / failed) that moves along shortest paths on
 the airport graph.  Progress along the current path is tracked as a scalar
 distance; the (x, y) position is interpolated linearly along the current
-edge on demand.  Battery drains per metre (more when towing) and recharges
-at the tug's home station.
+edge on demand.  Battery is tracked in physical kWh (pack size ``Config.battery_capacity_kwh``),
+drains per metre driven (more when towing) and recharges at the tug's home
+station.
 """
 
 from .airport import Airport
@@ -28,8 +29,10 @@ class Tug:
         self.node = home_station           # last graph node reached
         self.state = IDLE
         self.repositioning = False   # idle but drifting back to a pier hub
-        self.battery = 1.0
-        self.min_battery = 1.0             # for the never-negative invariant test
+        self.charging_station: str | None = None  # station reserved/occupied,
+                                                    # set on TO_CHARGER, cleared when done
+        self.battery = cfg.battery_capacity_kwh   # kWh, starts full
+        self.min_battery = cfg.battery_capacity_kwh  # for the never-negative invariant test
         self.theta = {r: cfg.theta0 for r in REGIONS}
         self.request = None                # Request currently being served
         # Path-following state.
@@ -38,7 +41,7 @@ class Tug:
         self._along = 0.0                  # metres travelled along _path
         # Lifetime statistics.
         self.total_distance = 0.0          # metres driven (empty + towing)
-        self.energy_used = 0.0             # battery fraction consumed by driving
+        self.energy_used = 0.0             # kWh consumed by driving
 
     # ------------------------------------------------------------- path logic
     def set_destination(self, node: str) -> None:
@@ -92,9 +95,18 @@ class Tug:
 
     # ------------------------------------------------------------ convenience
     @property
+    def battery_frac(self) -> float:
+        """State of charge as a fraction of battery_capacity_kwh, in [0, 1].
+
+        Used wherever a normalised charge level is needed (eligibility
+        threshold, wasp force term, recorded/plotted SoC) so those stay
+        pack-size-independent."""
+        return self.battery / self.cfg.battery_capacity_kwh
+
+    @property
     def eligible(self) -> bool:
         """Idle, healthy, and enough charge to accept work."""
-        return self.state == IDLE and self.battery >= self.cfg.recharge_trigger
+        return self.state == IDLE and self.battery_frac >= self.cfg.recharge_trigger
 
     def dist_to(self, node: str) -> float:
         """Shortest-path distance from the tug's reference node to ``node``."""

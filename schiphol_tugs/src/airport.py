@@ -76,14 +76,12 @@ class Request:
     priority: float = 1.0  # VRTM stimulus multiplier, see aircraft_class
     # Runtime bookkeeping, filled in by the simulator:
     tug_id: int | None = None
-    assigned_time: int | None = None
     tow_start: int | None = None
     tow_end: int | None = None
 
     def reset_assignment(self) -> None:
         """Re-open the request (used when its tug fails)."""
         self.tug_id = None
-        self.assigned_time = None
         self.tow_start = None
         self.tow_end = None
 

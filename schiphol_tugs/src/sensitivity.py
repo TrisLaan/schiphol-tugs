@@ -1,11 +1,11 @@
 """Parameter sensitivity analysis: one-at-a-time sweeps (tornado plot), a 2D
 interaction sweep (heatmap), and environment-parameter sweeps -- all with
 multiple seeds per cell so sweep results carry uncertainty like every other
-figure in this project (see AUDIT.md category 6).
+figure in this project.
 
 Sweeps run on a short (``ExperimentConfig.sens_hours``) morning-peak window,
 not the full 24 h day, so the whole sensitivity analysis finishes in well
-under a minute even though it covers 8 algorithm/environment parameters. All
+under a minute even though it covers 7 algorithm/environment parameters. All
 sweeps start from the *calibrated* configuration (passed in as ``cfg``) and
 vary exactly one field away from it, which is what makes this a meaningful
 one-at-a-time sensitivity analysis rather than 8 independent calibrations.
@@ -24,9 +24,9 @@ from .simulator import Simulation
 
 
 def _run_cell(airport: Airport, cfg: Config, ec: ExperimentConfig, seed_base: int,
-             duration_s: int, rate_multiplier=None) -> tuple[float, float]:
-    """(mean_wait_s, specialization_end), each averaged over ec.sens_seeds seeds."""
-    waits, specs = [], []
+             duration_s: int, rate_multiplier=None) -> float:
+    """Mean waiting time (s), averaged over ec.sens_seeds seeds."""
+    waits = []
     for k in range(ec.sens_seeds):
         reqs = generate_requests(airport, cfg, make_rng(seed_base + 10 * k),
                                  duration_s, start_hour=ec.sens_start_hour,
@@ -34,11 +34,8 @@ def _run_cell(airport: Airport, cfg: Config, ec: ExperimentConfig, seed_base: in
         sim = Simulation(airport, cfg, reqs, make_rng(seed_base + 10 * k + 1),
                          mode="swarm", duration_s=duration_s)
         sim.run()
-        stats = metrics.summarize(sim)
-        waits.append(stats["mean_wait_s"])
-        _, spec = metrics.specialization_series(sim.snapshots)
-        specs.append(float(spec[-1]) if len(spec) else float("nan"))
-    return float(np.nanmean(waits)), float(np.nanmean(specs))
+        waits.append(metrics.summarize(sim)["mean_wait_s"])
+    return float(np.nanmean(waits))
 
 
 def run_sensitivity(airport: Airport, cfg: Config, ec: ExperimentConfig,
@@ -47,18 +44,18 @@ def run_sensitivity(airport: Airport, cfg: Config, ec: ExperimentConfig,
     rows: list[dict] = []
     stream = 90_000
 
-    def record(param, value, mean_wait, spec):
+    def record(param, value, mean_wait):
         rows.append({"parameter": param, "value": value, "mean_wait_s": mean_wait,
-                    "specialization_end": spec, "n_seeds": ec.sens_seeds})
+                    "n_seeds": ec.sens_seeds})
 
     def sweep_cfg_field(param_label, field, grid):
         nonlocal stream
         vals = []
         for v in grid:
             c = replace(cfg, **{field: v})
-            mw, sp = _run_cell(airport, c, ec, stream, duration_s)
+            mw = _run_cell(airport, c, ec, stream, duration_s)
             stream += 100
-            record(param_label, v, mw, sp)
+            record(param_label, v, mw)
             vals.append(mw)
         return list(grid), vals
 
@@ -68,9 +65,9 @@ def run_sensitivity(airport: Airport, cfg: Config, ec: ExperimentConfig,
         for v in grid:
             c = transform(cfg, v)
             a = Airport(c) if rebuild_airport else airport
-            mw, sp = _run_cell(a, c, ec, stream, duration_s)
+            mw = _run_cell(a, c, ec, stream, duration_s)
             stream += 100
-            record(param_label, v, mw, sp)
+            record(param_label, v, mw)
             vals.append(mw)
         return list(grid), vals
 
@@ -88,14 +85,15 @@ def run_sensitivity(airport: Airport, cfg: Config, ec: ExperimentConfig,
         "theta_bounds_mult", ec.theta_spread_sens_grid, theta_bounds)
 
     # --- environment parameters -------------------------------------------
-    tornado["fleet_size"] = sweep_cfg_field("fleet_size", "fleet_size", ec.fleet_sens_grid)
-
+    # fleet_size is intentionally not swept here: it is a fixed,
+    # literature-sourced constant (Config.fleet_size = 29), not a decision
+    # or algorithm parameter, so it stays out of this sensitivity analysis.
     demand_vals = []
     for mult in ec.demand_mult_sens_grid:
-        mw, sp = _run_cell(airport, cfg, ec, stream, duration_s,
-                           rate_multiplier=lambda t, m=mult: m)
+        mw = _run_cell(airport, cfg, ec, stream, duration_s,
+                       rate_multiplier=lambda t, m=mult: m)
         stream += 100
-        record("demand_multiplier", mult, mw, sp)
+        record("demand_multiplier", mult, mw)
         demand_vals.append(mw)
     tornado["demand rate (×)"] = (list(ec.demand_mult_sens_grid), demand_vals)
 
@@ -104,7 +102,7 @@ def run_sensitivity(airport: Airport, cfg: Config, ec: ExperimentConfig,
     tornado["n_charging_stations"] = sweep_transform(
         "n_charging_stations", ec.n_chargers_sens_grid, n_chargers, rebuild_airport=True)
 
-    baseline_wait, _ = _run_cell(airport, cfg, ec, stream, duration_s)
+    baseline_wait = _run_cell(airport, cfg, ec, stream, duration_s)
     stream += 100
 
     df = pd.DataFrame(rows)
@@ -123,8 +121,8 @@ def run_sensitivity(airport: Airport, cfg: Config, ec: ExperimentConfig,
     for iy, mult in enumerate(y_grid):
         for ix, xi_val in enumerate(x_grid):
             c = replace(cfg, xi=xi_val)
-            mw, _ = _run_cell(airport, c, ec, stream, duration_s,
-                              rate_multiplier=lambda t, m=mult: m)
+            mw = _run_cell(airport, c, ec, stream, duration_s,
+                           rate_multiplier=lambda t, m=mult: m)
             stream += 100
             z_mean[iy, ix] = mw
     plotting.plot_sensitivity_heatmap(

@@ -28,7 +28,7 @@ def test_run_sensitivity_smoke(airport, tmp_path):
         sens_hours=0.2, sens_start_hour=7.0, sens_seeds=1,
         xi_sens_grid=(0.5, 2.0), phi_sens_grid=(0.05, 0.2),
         n_exp_sens_grid=(1.0, 2.0), theta_spread_sens_grid=(0.5, 1.0),
-        w_d_sens_grid=(0.3, 0.6), fleet_sens_grid=(10, 15),
+        w_d_sens_grid=(0.3, 0.6),
         demand_mult_sens_grid=(0.5, 1.0), n_chargers_sens_grid=(2, 3),
         heatmap_xi_grid=(0.5, 2.0), heatmap_demand_grid=(0.5, 1.0),
     )

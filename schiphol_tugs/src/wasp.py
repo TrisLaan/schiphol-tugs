@@ -29,6 +29,24 @@ def force(d_norm: float, battery: float, busy: bool, cfg: Config) -> float:
     )
 
 
+def charge_force(d_norm: float, battery_frac: float, cfg: Config) -> float:
+    """Reversed dominance force for the charging-bay queue contest.
+
+    The mirror image of :func:`force`: favours *low* battery (urgent) and
+    proximity to the charging station (cheap to send now), instead of high
+    battery and proximity to a job. Only idle, non-repositioning tugs are
+    ever candidates, so there is no "not busy" term.
+
+    ``d_norm`` is the shortest-path distance to the station divided by the
+    airport bounding-box diagonal, ``battery_frac`` the charge fraction in
+    [0, 1].
+    """
+    return (
+        cfg.w_d_charge / (1.0 + d_norm)
+        + cfg.w_u_charge * (1.0 - battery_frac)
+    )
+
+
 def contest(responders: list, forces: list[float], cfg: Config,
             rng: np.random.Generator | None = None):
     """Resolve a contest; returns the winning element of ``responders``.

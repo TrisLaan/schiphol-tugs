@@ -43,3 +43,18 @@ def test_contest_rejects_bad_input():
         wasp.contest([], [], CFG)
     with pytest.raises(ValueError):
         wasp.contest(["a"], [0.1, 0.2], CFG)
+
+
+def test_charge_force_prefers_low_battery_near_station():
+    # Reversed force: low battery + close to the station should outrank
+    # high battery + far from it -- the mirror image of the job force.
+    urgent_near = wasp.charge_force(0.05, 0.1, cfg=CFG)
+    fine_far = wasp.charge_force(0.9, 0.9, cfg=CFG)
+    assert urgent_near > fine_far
+
+
+def test_charge_force_monotonic_in_urgency():
+    near = 0.2
+    low_batt = wasp.charge_force(near, 0.1, cfg=CFG)
+    high_batt = wasp.charge_force(near, 0.45, cfg=CFG)
+    assert low_batt > high_batt

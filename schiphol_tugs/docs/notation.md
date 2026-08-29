@@ -10,7 +10,7 @@ defines or consumes it, so report and repository stay in sync.
 | Abbreviation | Expansion |
 |---|---|
 | VRTM | Variable Response Threshold Model (Theraulaz, Bonabeau & Deneubourg, 1998) |
-| SoC | State of Charge — battery fraction in [0, 1] |
+| SoC | State of Charge — battery fraction in [0, 1] (`Tug.battery_frac`), derived from the physical kWh battery state |
 | CI | Confidence Interval |
 | CDF | Cumulative Distribution Function |
 | CV | Coefficient of Variation (std / mean) |
@@ -41,7 +41,6 @@ per rubric categories 1 vs. 2).
 | α | Stimulus growth rate | `Config.alpha` | stimulus units / s | 2.0 | How fast an unmet request's stimulus grows with waiting time | project-specific |
 | s_max | Stimulus ceiling | `Config.s_max` | stimulus units | 200.0 | Saturation cap so `P → 1` for very old requests without overflow | project-specific |
 | priority | Job-type stimulus multiplier | `Request.priority` | dimensionless | 1.0 (narrow-body) / 1.8 (wide-body) | Scales α per request: wide-body (schedule-critical) turnarounds become urgent faster than narrow-body ones at the same wait — the model's heterogeneous-job-type mechanism (see §2.4 below and `src/vrtm.py::stimulus`) | project-specific |
-| adaptive | Learning on/off | `Config.adaptive` | bool | True | `False` freezes θ (the ablation control, `results/figures/ablation.png`) | project-specific |
 
 ### 2.2 Wasp dominance-contest parameters
 
@@ -51,14 +50,25 @@ per rubric categories 1 vs. 2).
 | w_b | Battery weight | `Config.w_b` | dimensionless | 0.3 | Weight of state-of-charge in `F` | Cicirello & Smith (2001, 2004) |
 | w_s | Idle-status weight | `Config.w_s` | dimensionless | 0.1 | Weight of "not currently busy" in `F` | Cicirello & Smith (2001, 2004) |
 | contest_mode | Resolution rule | `Config.contest_mode` | categorical | `"deterministic"` | `"deterministic"`: highest F wins outright; `"stochastic"`: sequential pairwise elimination with `P(i beats j) = F_i²/(F_i²+F_j²)` | Cicirello & Smith (2001) eq. for probabilistic dominance |
+| w_d_charge | Charging-contest distance weight | `Config.w_d_charge` | dimensionless | 0.6 | Weight of proximity to the station in the reversed force `F_charge` (`wasp.charge_force`) | project-specific, mirrors w_d |
+| w_u_charge | Charging-contest urgency weight | `Config.w_u_charge` | dimensionless | 0.4 | Weight of `(1 - battery_frac)` in `F_charge` -- low battery is rewarded instead of high battery, the mirror image of w_b | project-specific, mirrors w_b |
+
+`F_charge` resolves the charging-bay queue the same way `F` resolves a job
+contest, but swarm-side and inverted: a broadcast "low battery" signal
+(`Config.charge_call_threshold`, SoC below which an idle tug becomes a
+candidate) plus a reversed dominance contest among candidates decide who
+gets a free bay (`Config.bays_per_station`), instead of every candidate
+crossing the hard `recharge_trigger` floor in the same tick
+(`Simulation._run_charging_dispatch`, swarm mode only — see §2.3). The hard
+floor itself is untouched and always bypasses this queue (safety override).
 
 ### 2.3 Fleet / environment parameters that interact with the method
 
 (Full list in `src/config.py`; listed in rubric category 2, not repeated
 here — e.g. `fleet_size`, `speed_empty`, `speed_towing`, `drain_empty`,
-`drain_towing`, `recharge_rate`, `recharge_trigger`, `n_charging_stations`,
-`base_rate`, `morning_peak`, `evening_peak`, `p_departure`, `p_widebody`,
-`widebody_priority`.)
+`drain_towing`, `recharge_rate`, `recharge_trigger`, `charge_call_threshold`,
+`bays_per_station`, `n_charging_stations`, `base_rate`, `morning_peak`,
+`evening_peak`, `p_departure`, `p_widebody`, `widebody_priority`.)
 
 ### 2.4 Heterogeneous job types
 
@@ -77,8 +87,8 @@ rather than urgency.
 ## 3. State space and action space
 
 - **State space** (per tug): continuous 2-D position (linear interpolation
-  along the current graph edge, `src/tug.py:57`), continuous battery SoC in
-  [0, 1] (`src/tug.py:78`), a discrete machine state
+  along the current graph edge, `src/tug.py:57`), continuous battery state
+  in [0, 300] kWh (`src/tug.py:78`), a discrete machine state
   (idle/moving_to_aircraft/towing/moving_to_charger/charging/failed), and a
   continuous threshold vector θ ∈ ℝ⁸ (one per pier region).
 - **Action space** (per tug, per open request): a stochastic binary
@@ -117,12 +127,20 @@ what `src/baseline.py::assign_nearest`/`assign_optimal` add back in, which is
 - **Time**: seconds since 00:00 sim-clock, `int` throughout
   (`Request.time`, `Tug` state machine ticks at `Config.dt` = 1.0 s).
   Figures and the report convert to hours for readability only.
-- **Battery / SoC**: dimensionless fraction in [0, 1] (`Tug.battery`); drain
-  rates are battery-fraction per metre driven (`Config.drain_empty`,
-  `Config.drain_towing`); recharge rate is battery-fraction per second
-  (`Config.recharge_rate`). The "energy" figures report this as
-  percentage-points consumed, a proxy proportional to true kWh for a
-  fixed pack size (see `src/metrics.py::summarize`, `total_energy_pct`).
+- **Battery**: physical energy in kWh (`Tug.battery`, pack size
+  `Config.battery_capacity_kwh` = 300); drain rates are kWh per metre driven
+  (`Config.drain_empty` = 1.5 kWh/km, `Config.drain_towing` = 4.5 kWh/km);
+  recharge rate is kWh per second, derived from a 150 kW charger
+  (`Config.charger_power_kw`, `Config.recharge_rate`). The "energy" figures
+  report true kWh consumed by the fleet (see `src/metrics.py::summarize`,
+  `total_energy_kwh`).
+- **SoC**: `Tug.battery_frac` = `Tug.battery / Config.battery_capacity_kwh`,
+  a dimensionless fraction in [0, 1] derived from the physical battery state.
+  Everything that needs a normalised charge level — the eligibility
+  threshold (`Config.recharge_trigger`), the wasp force's battery term
+  (`Config.w_b`), and the recorded/plotted battery arcs — reads this
+  fraction rather than the raw kWh value, so those stay pack-size
+  independent.
 - **Stimulus / threshold**: shared, dimensionless "urgency" units — s and θ
   are only ever compared to each other (`P = sⁿ/(sⁿ+θⁿ)`), so no physical
   unit is attached; `s0`, `alpha`, `theta0`, etc. were chosen so that
@@ -139,13 +157,11 @@ Every headline experiment in `run_all.py` is replicated over
 `ExperimentConfig.n_seeds` (default 6) independent request-stream/decision
 seeds. Aggregated figures and `results/summary.json` report the seed-wise
 **mean** and a **95% t-distribution confidence-interval half-width**
-(`src/stats.py::mean_ci`); time-series figures (e.g.
-`specialization_index.png`) show mean ± 1 standard deviation as a shaded
-band across seeds. Configuration comparisons (swarm vs. baseline, adaptive
-vs. fixed-threshold ablation) are additionally tested with a paired
-Wilcoxon signed-rank test plus a matched-pairs rank-biserial effect size
-(`src/stats.py::paired_test`), run seed-by-seed on the *same* request stream
-so the comparison is paired, not independent-samples.
+(`src/stats.py::mean_ci`). The swarm-vs.-baseline comparison is additionally
+tested with a paired Wilcoxon signed-rank test plus a matched-pairs
+rank-biserial effect size (`src/stats.py::paired_test`), run seed-by-seed on
+the *same* request stream so the comparison is paired, not
+independent-samples.
 
 No warm-up/transient period is discarded before computing metrics: demand is
 explicitly non-stationary (a 24 h diurnal profile with morning/evening

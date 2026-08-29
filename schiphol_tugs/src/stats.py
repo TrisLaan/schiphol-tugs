@@ -45,7 +45,7 @@ def paired_test(a, b) -> dict:
     if np.allclose(diff, 0.0):
         return {"test": "wilcoxon", "n": int(n), "p_value": 1.0,
                 "effect_size_rank_biserial": 0.0}
-    stat, p = _sps.wilcoxon(a, b)
+    _, p = _sps.wilcoxon(a, b)
     ranks = _sps.rankdata(np.abs(diff))
     r_plus = ranks[diff > 0].sum()
     r_minus = ranks[diff < 0].sum()

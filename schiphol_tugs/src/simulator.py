@@ -7,7 +7,7 @@ Each step:
      available in baseline mode),
   4. resolve multi-responder conflicts with the wasp dominance contest,
   5. assign winners (losers stay eligible for the next request),
-  6. adapt thresholds (swarm mode with adaptation on),
+  6. adapt thresholds (swarm mode),
 and every event is appended to an in-memory log that can be written to CSV.
 """
 
@@ -33,10 +33,7 @@ class Simulation:
         rng: np.random.Generator,
         mode: str = "swarm",
         duration_s: int = 24 * 3600,
-        failure_time: int | None = None,
-        failed_ids: tuple[int, ...] = (),
         record_window: tuple[int, int] | None = None,
-        station_outage: tuple[str, int, int] | None = None,
     ):
         assert mode in ("swarm", "baseline", "random", "optimal")
         self.airport = airport
@@ -44,11 +41,6 @@ class Simulation:
         self.mode = mode
         self.rng = rng
         self.duration_s = duration_s
-        self.failure_time = failure_time
-        self.failed_ids = failed_ids
-        # (station_id, start_s, end_s): tugs whose home station is disabled
-        # in this window reroute to the nearest other station to charge.
-        self.station_outage = station_outage
         # Each run works on its own copies, so paired experiments (swarm and
         # baseline on the same stream) never contaminate each other's records.
         self.requests = [copy.copy(r) for r in requests]
@@ -109,17 +101,6 @@ class Simulation:
         )
 
     # ------------------------------------------------------------------ steps
-    def _charging_destination(self, tug: Tug) -> str:
-        """Home station, unless it is under a simulated outage right now."""
-        if self.station_outage is not None:
-            station, w0, w1 = self.station_outage
-            if tug.home_station == station and w0 <= self.t < w1:
-                alternatives = [cs for cs in self.airport.charging_stations
-                                if cs != station]
-                return min(alternatives,
-                           key=lambda cs: self.airport.dist[tug.node][cs])
-        return tug.home_station
-
     def _reposition_target(self, tug: Tug) -> str:
         """Pier hub an idle tug drifts back to after finishing a job.
 
@@ -147,33 +128,79 @@ class Simulation:
             tug.repositioning = True
             self.log("tug_repositioning", tug.id, node=target)
 
+    def _send_to_charger(self, tug: Tug, dest: str | None = None) -> None:
+        """Dispatch ``tug`` to a charging station, unconditionally.
+
+        Used both by the hard safety floor (recharge_trigger, always wins
+        regardless of bay availability) and by the soft-call contest in
+        :meth:`_run_charging_dispatch` (only called once a bay is free)."""
+        tug.repositioning = False
+        tug.state = TO_CHARGER
+        dest = dest or tug.home_station
+        tug.charging_station = dest
+        tug.set_destination(dest)
+        self.log("tug_to_charger", tug.id, node=dest)
+
+    def _run_charging_dispatch(self) -> None:
+        """Soft charging-bay queue: idle tugs between recharge_trigger and
+        charge_call_threshold contest for a free bay at their (rerouted-if-
+        outaged) destination station via a reversed wasp force that favours
+        low battery and proximity (wasp.charge_force) -- the mirror image of
+        the job-assignment contest. Bay capacity (cfg.bays_per_station) is
+        the actual throttle: it staggers a synchronized low-battery wave
+        instead of letting every candidate cross a single hard threshold in
+        the same tick. Tugs that hit the hard recharge_trigger floor bypass
+        this entirely via _send_to_charger in _update_tug."""
+        cfg = self.cfg
+        candidates = [
+            tug for tug in self.tugs
+            if tug.state == IDLE and not tug.repositioning
+            and cfg.recharge_trigger <= tug.battery_frac < cfg.charge_call_threshold
+        ]
+        if not candidates:
+            return
+        by_station: dict[str, list[Tug]] = {}
+        for tug in candidates:
+            by_station.setdefault(tug.home_station, []).append(tug)
+        for station, pool in by_station.items():
+            occupied = sum(
+                1 for t in self.tugs
+                if t.charging_station == station and t.state in (TO_CHARGER, CHARGING)
+            )
+            free = max(0, cfg.bays_per_station - occupied)
+            pool = list(pool)
+            for _ in range(min(free, len(pool))):
+                forces = [
+                    wasp.charge_force(tug.dist_to(station) / self.airport.diag,
+                                      tug.battery_frac, cfg)
+                    for tug in pool
+                ]
+                winner = wasp.contest(pool, forces, cfg, self.rng)
+                pool.remove(winner)
+                self._send_to_charger(winner, station)
+
     def _update_tug(self, tug: Tug) -> None:
         cfg = self.cfg
         if tug.state in (FAILED,):
             return
         if tug.state == CHARGING:
-            tug.battery = min(cfg.charge_target, tug.battery + cfg.recharge_rate * cfg.dt)
-            if tug.battery >= cfg.charge_target:
+            cap = cfg.battery_capacity_kwh
+            tug.battery = min(cfg.charge_target * cap, tug.battery + cfg.recharge_rate * cfg.dt)
+            if tug.battery >= cfg.charge_target * cap:
                 self.log("tug_charging_ended", tug.id, node=tug.node)
+                tug.charging_station = None
                 self._go_idle(tug)
             return
         if tug.state == IDLE:
-            if tug.battery < cfg.recharge_trigger:
-                tug.repositioning = False
-                tug.state = TO_CHARGER
-                dest = self._charging_destination(tug)
-                tug.set_destination(dest)
-                self.log("tug_to_charger", tug.id, node=dest)
+            if tug.battery_frac < cfg.recharge_trigger:
+                self._send_to_charger(tug)
             elif tug.repositioning:
                 if tug.advance(cfg.dt):  # still interruptible: idle => eligible
                     tug.repositioning = False
-            elif cfg.idle_topup > 0.0 and tug.battery < cfg.idle_topup:
+            elif cfg.idle_topup > 0.0 and tug.battery_frac < cfg.idle_topup:
                 # Nothing to do and battery below the top-up point: charge now
                 # rather than being forced to at 25 % during a peak.
-                tug.state = TO_CHARGER
-                dest = self._charging_destination(tug)
-                tug.set_destination(dest)
-                self.log("tug_to_charger", tug.id, node=dest)
+                self._send_to_charger(tug)
             return
         # Moving states.
         arrived = tug.advance(cfg.dt)
@@ -190,11 +217,8 @@ class Simulation:
             req.tow_end = self.t
             tug.request = None
             self.log("tow_completed", tug.id, req.req_id, node=req.dest)
-            if tug.battery < cfg.recharge_trigger:
-                tug.state = TO_CHARGER
-                dest = self._charging_destination(tug)
-                tug.set_destination(dest)
-                self.log("tug_to_charger", tug.id, node=dest)
+            if tug.battery_frac < cfg.recharge_trigger:
+                self._send_to_charger(tug)
             else:
                 self._go_idle(tug)
         elif tug.state == TO_CHARGER:
@@ -213,7 +237,6 @@ class Simulation:
 
     def _assign(self, req: Request, tug: Tug) -> None:
         req.tug_id = tug.id
-        req.assigned_time = self.t
         tug.repositioning = False  # a job interrupts any idle drift
         tug.request = req
         tug.state = TO_AIRCRAFT
@@ -239,7 +262,7 @@ class Simulation:
                 continue
             forces = [
                 wasp.force(tug.dist_to(req.origin) / self.airport.diag,
-                           tug.battery, busy=False, cfg=cfg)
+                           tug.battery_frac, busy=False, cfg=cfg)
                 for tug in responders
             ]
             winner = wasp.contest(responders, forces, cfg, self.rng)
@@ -251,13 +274,12 @@ class Simulation:
                     winner.id,
                 ))
             self._assign(req, winner)
-            if cfg.adaptive:
-                winner.theta[req.region] = vrtm.update_performer(
-                    winner.theta[req.region], cfg)
-                for tug in eligible:
-                    if tug is not winner:
-                        tug.theta[req.region] = vrtm.update_non_performer(
-                            tug.theta[req.region], cfg)
+            winner.theta[req.region] = vrtm.update_performer(
+                winner.theta[req.region], cfg)
+            for tug in eligible:
+                if tug is not winner:
+                    tug.theta[req.region] = vrtm.update_non_performer(
+                        tug.theta[req.region], cfg)
 
     def _assign_baseline(self) -> None:
         for req, tug in baseline.assign_nearest(self.open_requests, self.tugs, self.t):
@@ -271,24 +293,6 @@ class Simulation:
         for req, tug in baseline.assign_optimal(self.open_requests, self.tugs, self.t):
             self._assign(req, tug)
 
-    def _inject_failures(self) -> None:
-        """Permanently disable the configured tugs; re-open their requests.
-
-        Simplification: if a failed tug was en route or mid-tow, its request
-        is re-opened from the original origin (as if the aircraft never
-        left the stand / threshold).
-        """
-        for tug in self.tugs:
-            if tug.id in self.failed_ids:
-                if tug.request is not None:
-                    req = tug.request
-                    req.reset_assignment()
-                    self.open_requests.append(req)
-                    self.open_requests.sort(key=lambda r: (r.time, r.req_id))
-                    tug.request = None
-                tug.state = FAILED
-                self.log("tug_failed", tug.id, node=tug.node)
-
     def _snapshot(self) -> None:
         arr = np.array([[tug.theta[r] for r in REGIONS] for tug in self.tugs])
         self.snapshots.append((self.t, arr))
@@ -298,10 +302,14 @@ class Simulation:
         for self.t in range(0, self.duration_s + 1):
             if self.t % self.cfg.snapshot_interval == 0:
                 self._snapshot()
-            if self.failure_time is not None and self.t == self.failure_time:
-                self._inject_failures()
             for tug in self.tugs:
                 self._update_tug(tug)
+            if self.mode == "swarm":
+                # Reversed-contest charging queue is a swarm-side coordination
+                # protocol (broadcast + contest, no central dispatcher), so it
+                # only applies here -- baseline/random/optimal keep the
+                # unconditional hard-trigger charging behaviour unchanged.
+                self._run_charging_dispatch()
             self._activate_requests()
             if self.open_requests:
                 if self.mode == "swarm":
@@ -331,7 +339,7 @@ class Simulation:
             r["x"][i] = x
             r["y"][i] = y
             r["state"][i] = self._STATE_CODE[tug.state]
-            r["battery"][i] = tug.battery
+            r["battery"][i] = tug.battery_frac
             r["req"][i] = tug.request.req_id if tug.request is not None else -1
             i += 1
         self._rec_i = i

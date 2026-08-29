@@ -62,7 +62,7 @@ def test_request_generation_is_reasonable(airport):
 
 def test_requests_are_heterogeneous_by_aircraft_class(airport):
     """Job types differ: wide-bodies carry a higher VRTM stimulus priority
-    than narrow-bodies, drawn at Config.p_widebody (AUDIT.md 2.2)."""
+    than narrow-bodies, drawn at Config.p_widebody."""
     cfg = Config()
     reqs = generate_requests(airport, cfg, make_rng(124), 24 * 3600)
     classes = {r.aircraft_class for r in reqs}
